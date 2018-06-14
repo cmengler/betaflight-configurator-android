@@ -1,0 +1,3 @@
+[submodule "betaflight-configurator"]
+	path = betaflight-configurator
+	url = https://github.com/betaflight/betaflight-configurator.git
