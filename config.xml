@@ -1,5 +1,5 @@
 <?xml version='1.0' encoding='utf-8'?>
-<widget id="tech.betaflight.android" version="10.3.0" xmlns="http://www.w3.org/ns/widgets" xmlns:cdv="http://cordova.apache.org/ns/1.0">
+<widget id="tech.betaflight.android" version="10.6.0" xmlns="http://www.w3.org/ns/widgets" xmlns:cdv="http://cordova.apache.org/ns/1.0">
     <name>Betaflight - Configurator</name>
     <description>Crossplatform configuration tool for Betaflight flight control system</description>
     <author email="christian@cmengler.com" href="https://betaflight.tech">Betaflight Squad</author>
@@ -37,6 +37,7 @@
         <splash density="land-xhdpi" src="res/android/screen/drawable-land-xhdpi/screen.png" />
         <splash density="land-xxhdpi" src="res/android/screen/drawable-land-xxhdpi/screen.png" />
         <splash density="land-xxxhdpi" src="res/android/screen/drawable-land-xxxhdpi/screen.png" />
+        <preference name="android-minSdkVersion" value="19" />
         <preference name="StatusBarOverlaysWebView" value="false" />
         <preference name="StatusBarBackgroundColor" value="#000000" />
         <preference name="StatusBarStyle" value="lightcontent" />
@@ -59,5 +60,5 @@
     <plugin name="cordova-plugin-chrome-apps-runtime" spec="^2.0.0" />
     <plugin name="cordova-plugin-whitelist" spec="^1.3.3" />
     <plugin name="cordova-plugin-chrome-apps-sockets-tcp" spec="https://github.com/KoenLav/cordova-plugin-chrome-apps-sockets-tcp.git" />
-    <engine name="android" spec="^6.4.0" />
+    <engine name="android" spec="^8.1.0" />
 </widget>

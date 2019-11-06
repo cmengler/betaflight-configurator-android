@@ -9,6 +9,11 @@ var app = {
         app.receivedEvent('deviceready');
         StatusBar.backgroundColorByHexString('#000000');
 
+        $.getJSON('version.json', function(data) {
+            CONFIGURATOR.version = data.version;
+            CONFIGURATOR.gitChangesetId = data.gitChangesetId;
+        });
+
         i18n.init(function() {
             startProcess();
             initializeSerialBackend();

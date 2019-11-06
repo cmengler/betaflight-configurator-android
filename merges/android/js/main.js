@@ -1,19 +1,93 @@
 'use strict';
 
-openNewWindowsInExternalBrowser();
+var googleAnalytics = analytics;
+var analytics = undefined;
+
+function checkSetupAnalytics(callback) {
+    if (!analytics) {
+        setTimeout(function () {
+            ConfigStorage.get(['userId', 'analyticsOptOut', 'checkForConfiguratorUnstableVersions', ], function (result) {
+                if (!analytics) {
+                    setupAnalytics(result);
+                }
+
+                callback(analytics);
+            });
+        });
+    } else if (callback) {
+        callback(analytics);
+    }
+};
+
+function getBuildType() {
+    return GUI.Mode;
+}
+
+function setupAnalytics(result) {
+    var userId;
+    if (result.userId) {
+        userId = result.userId;
+    } else {
+        var uid = new ShortUniqueId();
+        userId = uid.randomUUID(13);
+
+        ConfigStorage.set({ 'userId': userId });
+    }
+
+    var optOut = !!result.analyticsOptOut;
+    var checkForDebugVersions = !!result.checkForConfiguratorUnstableVersions;
+
+    var debugMode = typeof process === "object" && process.versions['nw-flavor'] === 'sdk';
+
+    analytics = new Analytics('UA-123002063-1', userId, 'Betaflight Configurator', CONFIGURATOR.version, CONFIGURATOR.gitChangesetId, GUI.operating_system, checkForDebugVersions, optOut, debugMode, getBuildType());
+
+    function logException(exception) {
+        analytics.sendException(exception.stack);
+    }
+
+    if (typeof process === "object") {
+        process.on('uncaughtException', logException);
+    }
+
+    analytics.sendEvent(analytics.EVENT_CATEGORIES.APPLICATION, 'AppStart', { sessionControl: 'start' });
+
+    function sendCloseEvent() {
+        analytics.sendEvent(analytics.EVENT_CATEGORIES.APPLICATION, 'AppClose', { sessionControl: 'end' })
+    }
+
+    if (GUI.isNWJS()) {
+        var win = GUI.nwGui.Window.get();
+        win.on('close', function () {
+            sendCloseEvent();
+
+            this.close(true);
+        });
+        win.on('new-win-policy', function(frame, url, policy) {
+            // do not open the window
+            policy.ignore();
+            // and open it in external browser
+            GUI.nwGui.Shell.openExternal(url);
+        });
+    } else if (!GUI.isOther()) {
+        // Looks like we're in Chrome - but the event does not actually get fired
+        chrome.runtime.onSuspend.addListener(sendCloseEvent);
+    }
+
+    $('.connect_b a.connect').removeClass('disabled');
+    $('.firmware_b a.flash').removeClass('disabled');
+}
 
 //Process to execute to real start the app
 function startProcess() {
-
     // translate to user-selected language
     i18n.localizePage();
 
     // alternative - window.navigator.appVersion.match(/Chrome\/([0-9.]*)/)[1];
-    GUI.log(i18n.getMessage('infoVersions',{operatingSystem: GUI.operating_system, 
-                                            chromeVersion: window.navigator.appVersion.replace(/.*Chrome\/([0-9.]*).*/, "$1"), 
-                                            configuratorVersion: getManifestVersion()}));
+    GUI.log(i18n.getMessage('infoVersions', { operatingSystem: GUI.operating_system,
+                                            chromeVersion: window.navigator.appVersion.replace(/.*Chrome\/([0-9.]*).*/, "$1"),
+                                            configuratorVersion: CONFIGURATOR.version }));
 
-    $('#logo .version').text(getManifestVersion());
+    $('#logo .version').text(CONFIGURATOR.version);
     updateStatusBarVersion();
     updateTopBarVersion();
 
@@ -32,15 +106,9 @@ function startProcess() {
             break;
     }
 
-    if (GUI.operating_system !== 'ChromeOS') {
+    if (!GUI.isOther() && GUI.operating_system !== 'ChromeOS') {
         checkForConfiguratorUpdates();
     }
-
-    chrome.storage.local.get('logopen', function (result) {
-        if (result.logopen) {
-            $("#showlog").trigger('click');
-        }
-    });
 
     // log webgl capability
     // it would seem the webgl "enabling" through advanced settings will be ignored in the future
@@ -51,6 +119,13 @@ function startProcess() {
     console.log('Libraries: jQuery - ' + $.fn.jquery + ', d3 - ' + d3.version + ', three.js - ' + THREE.REVISION);
 
     // Tabs
+    $("#tabs ul.mode-connected li").click(function() {
+        // store the first class of the current tab (omit things like ".active")
+        ConfigStorage.set({
+            lastTab: $(this).attr("class").split(' ')[0]
+        });
+    });
+
     var ui_tabs = $('#tabs > ul');
     $('a', ui_tabs).click(function () {
         if ($(this).parent().hasClass('active') == false && !GUI.tab_switch_in_progress) { // only initialize when the tab isn't already active
@@ -72,7 +147,14 @@ function startProcess() {
                 return;
             }
 
-            if (GUI.allowedTabs.indexOf(tab) < 0) {
+            if (GUI.allowedTabs.indexOf(tab) < 0 && tabName == "Firmware Flasher") {
+                if (GUI.connected_to || GUI.connecting_to) {
+                    $('a.connect').click();
+                } else {
+                    self.disconnect();
+                }
+                $('div.open_firmware_flasher a.flash').click();
+            } else if (GUI.allowedTabs.indexOf(tab) < 0) {
                 GUI.log(i18n.getMessage('tabSwitchUpgradeRequired', [tabName]));
                 return;
             }
@@ -80,6 +162,11 @@ function startProcess() {
             GUI.tab_switch_in_progress = true;
 
             GUI.tab_switch_cleanup(function () {
+                // disable active firmware flasher if it was active
+                if ($('div#flashbutton a.flash_state').hasClass('active') && $('div#flashbutton a.flash').hasClass('active')) {
+                    $('div#flashbutton a.flash_state').removeClass('active');
+                    $('div#flashbutton a.flash').removeClass('active');
+                }
                 // disable previously active tab highlight
                 $('li', ui_tabs).removeClass('active');
 
@@ -97,9 +184,19 @@ function startProcess() {
                     GUI.tab_switch_in_progress = false;
                 }
 
+                checkSetupAnalytics(function (analytics) {
+                    analytics.sendAppView(tab);
+                });
+
                 switch (tab) {
                     case 'landing':
                         TABS.landing.initialize(content_ready);
+                        break;
+                    case 'changelog':
+                        TABS.staticTab.initialize('changelog', content_ready);
+                        break;
+                    case 'privacy_policy':
+                        TABS.staticTab.initialize('privacy_policy', content_ready);
                         break;
                     case 'firmware_flasher':
                         TABS.firmware_flasher.initialize(content_ready);
@@ -127,6 +224,9 @@ function startProcess() {
                         break;
                     case 'osd':
                         TABS.osd.initialize(content_ready);
+                        break;
+                    case 'vtx':
+                        TABS.vtx.initialize(content_ready);
                         break;
                     case 'power':
                         TABS.power.initialize(content_ready);
@@ -166,7 +266,7 @@ function startProcess() {
                         TABS.onboard_logging.initialize(content_ready);
                         break;
                     case 'cli':
-                        TABS.cli.initialize(content_ready);
+                        TABS.cli.initialize(content_ready, GUI.nwGui);
                         break;
 
                     default:
@@ -190,7 +290,7 @@ function startProcess() {
                 // translate to user-selected language
                 i18n.localizePage();
 
-                chrome.storage.local.get('permanentExpertMode', function (result) {
+                ConfigStorage.get('permanentExpertMode', function (result) {
                     if (result.permanentExpertMode) {
                         $('div.permanentExpertMode input').prop('checked', true);
                     }
@@ -198,18 +298,21 @@ function startProcess() {
                     $('div.permanentExpertMode input').change(function () {
                         var checked = $(this).is(':checked');
 
-                        chrome.storage.local.set({'permanentExpertMode': checked});
+                        ConfigStorage.set({'permanentExpertMode': checked});
 
                         $('input[name="expertModeCheckbox"]').prop('checked', checked).change();
-                        if (FEATURE_CONFIG) {
-                            updateTabList(FEATURE_CONFIG.features);
-                        }
-
                     }).change();
                 });
 
+                ConfigStorage.get('rememberLastTab', function (result) {
+                    $('div.rememberLastTab input')
+                        .prop('checked', !!result.rememberLastTab)
+                        .change(function() { ConfigStorage.set({rememberLastTab: $(this).is(':checked')}) })
+                        .change();
+                });
+
                 if (GUI.operating_system !== 'ChromeOS') {
-                    chrome.storage.local.get('checkForConfiguratorUnstableVersions', function (result) {
+                    ConfigStorage.get('checkForConfiguratorUnstableVersions', function (result) {
                         if (result.checkForConfiguratorUnstableVersions) {
                             $('div.checkForConfiguratorUnstableVersions input').prop('checked', true);
                         }
@@ -217,7 +320,7 @@ function startProcess() {
                         $('div.checkForConfiguratorUnstableVersions input').change(function () {
                             var checked = $(this).is(':checked');
 
-                            chrome.storage.local.set({'checkForConfiguratorUnstableVersions': checked});
+                            ConfigStorage.set({'checkForConfiguratorUnstableVersions': checked});
 
                             checkForConfiguratorUpdates();
                         });
@@ -226,28 +329,47 @@ function startProcess() {
                     $('div.checkForConfiguratorUnstableVersions').hide();
                 }
 
-                chrome.storage.local.get('userLanguageSelect', function (result) {
-
-                    var userLanguage_e = $('div.userLanguage select');
-                    var languagesAvailables = i18n.getLanguagesAvailables();
-                    userLanguage_e.append('<option value="DEFAULT">' + i18n.getMessage('language_default') + '</option>');
-                    userLanguage_e.append('<option disabled>------</option>');
-                    languagesAvailables.forEach(function(element) {
-                        var languageName = i18n.getMessage('language_' + element);
-                        userLanguage_e.append('<option value="' + element + '">' + languageName + '</option>');
-                    });
-                    
-                    if (result.userLanguageSelect) {
-                        userLanguage_e.val(result.userLanguageSelect);
+                ConfigStorage.get('analyticsOptOut', function (result) {
+                    if (result.analyticsOptOut) {
+                        $('div.analyticsOptOut input').prop('checked', true);
                     }
-                    
-                    userLanguage_e.change(function () {
-                        var languageSelected = $(this).val();
 
-                        // Select the new language, a restart is required
-                        chrome.storage.local.set({'userLanguageSelect': languageSelected});
-                    });
+                    $('div.analyticsOptOut input').change(function () {
+                        var checked = $(this).is(':checked');
+
+                        ConfigStorage.set({'analyticsOptOut': checked});
+
+                        checkSetupAnalytics(function (analytics) {
+                            if (checked) {
+                                analytics.sendEvent(analytics.EVENT_CATEGORIES.APPLICATION, 'OptOut');
+                            }
+
+                            analytics.setOptOut(checked);
+
+                            if (!checked) {
+                                analytics.sendEvent(analytics.EVENT_CATEGORIES.APPLICATION, 'OptIn');
+                            }
+                        });
+                    }).change();
                 });
+
+                $('div.cliAutoComplete input')
+                    .prop('checked', CliAutoComplete.configEnabled)
+                    .change(function () {
+                        var checked = $(this).is(':checked');
+
+                        ConfigStorage.set({'cliAutoComplete': checked});
+                        CliAutoComplete.setEnabled(checked);
+                    }).change();
+
+                $('#darkThemeSelect')
+                    .val(DarkTheme.configEnabled)
+                    .change(function () {
+                        var value = parseInt($(this).val());
+
+                        ConfigStorage.set({'darkTheme': value});
+                        setDarkTheme(value);
+                    }).change();
 
                 function close_and_cleanup(e) {
                     if (e.type == 'click' && !$.contains($('div#options-window')[0], e.target) || e.type == 'keyup' && e.keyCode == 27) {
@@ -353,7 +475,7 @@ function startProcess() {
             $("#content").removeClass('logopen');
             $(".tab_container").removeClass('logopen');
             $("#scrollicon").removeClass('active');
-            chrome.storage.local.set({'logopen': false});
+            ConfigStorage.set({'logopen': false});
 
             state = false;
         } else {
@@ -362,7 +484,7 @@ function startProcess() {
             $("#content").addClass('logopen');
             $(".tab_container").addClass('logopen');
             $("#scrollicon").addClass('active');
-            chrome.storage.local.set({'logopen': true});
+            ConfigStorage.set({'logopen': true});
 
             state = true;
         }
@@ -370,18 +492,50 @@ function startProcess() {
         $(this).data('state', state);
     });
 
-    chrome.storage.local.get('permanentExpertMode', function (result) {
+    ConfigStorage.get('logopen', function (result) {
+        if (result.logopen) {
+            $("#showlog").trigger('click');
+        }
+    });
+
+    ConfigStorage.get('permanentExpertMode', function (result) {
         if (result.permanentExpertMode) {
             $('input[name="expertModeCheckbox"]').prop('checked', true);
         }
 
         $('input[name="expertModeCheckbox"]').change(function () {
-            if (FEATURE_CONFIG) {
+            var checked = $(this).is(':checked');
+            checkSetupAnalytics(function (analytics) {
+                analytics.setDimension(analytics.DIMENSIONS.CONFIGURATOR_EXPERT_MODE, checked ? 'On' : 'Off');
+            });
+
+            if (FEATURE_CONFIG && FEATURE_CONFIG.features !== 0) {
                 updateTabList(FEATURE_CONFIG.features);
             }
         }).change();
     });
+
+    ConfigStorage.get('cliAutoComplete', function (result) {
+        CliAutoComplete.setEnabled(typeof result.cliAutoComplete == 'undefined' || result.cliAutoComplete); // On by default
+    });
+
+    ConfigStorage.get('darkTheme', function (result) {
+        if (result.darkTheme === undefined || typeof result.darkTheme !== "number") {
+            // sets dark theme to auto if not manually changed
+            setDarkTheme(2);
+        } else {
+            setDarkTheme(result.darkTheme);
+        }
+    });
 };
+
+function setDarkTheme(enabled) {
+    DarkTheme.setConfig(enabled);
+
+    checkSetupAnalytics(function (analytics) {
+        analytics.sendEvent(analytics.EVENT_CATEGORIES.APPLICATION, 'DarkTheme', enabled);
+    });
+}
 
 function checkForConfiguratorUpdates() {
     var releaseChecker = new ReleaseChecker('configurator', 'https://api.github.com/repos/betaflight/betaflight-configurator/releases');
@@ -390,7 +544,7 @@ function checkForConfiguratorUpdates() {
 }
 
 function notifyOutdatedVersion(releaseData) {
-    chrome.storage.local.get('checkForConfiguratorUnstableVersions', function (result) {
+    ConfigStorage.get('checkForConfiguratorUnstableVersions', function (result) {
         var showUnstableReleases = false;
         if (result.checkForConfiguratorUnstableVersions) {
             showUnstableReleases = true;
@@ -408,7 +562,7 @@ function notifyOutdatedVersion(releaseData) {
             }
         });
 
-        if (versions.length > 0 && semver.lt(getManifestVersion(), versions[0].tag_name)) {
+        if (versions.length > 0 && semver.lt(CONFIGURATOR.version, versions[0].tag_name)) {
             GUI.log(i18n.getMessage('configuratorUpdateNotice', [versions[0].tag_name, versions[0].html_url]));
 
             var dialog = $('.dialogConfiguratorUpdate')[0];
@@ -471,46 +625,31 @@ function isExpertModeEnabled() {
 }
 
 function updateTabList(features) {
+
+    if (isExpertModeEnabled()) {
+        $('#tabs ul.mode-connected li.tab_failsafe').show();
+        $('#tabs ul.mode-connected li.tab_adjustments').show();
+        $('#tabs ul.mode-connected li.tab_servos').show();
+        $('#tabs ul.mode-connected li.tab_sensors').show();
+        $('#tabs ul.mode-connected li.tab_logging').show();
+    } else {
+        $('#tabs ul.mode-connected li.tab_failsafe').hide();
+        $('#tabs ul.mode-connected li.tab_adjustments').hide();
+        $('#tabs ul.mode-connected li.tab_servos').hide();
+        $('#tabs ul.mode-connected li.tab_sensors').hide();
+        $('#tabs ul.mode-connected li.tab_logging').hide();
+    }
+
     if (features.isEnabled('GPS') && isExpertModeEnabled()) {
         $('#tabs ul.mode-connected li.tab_gps').show();
     } else {
         $('#tabs ul.mode-connected li.tab_gps').hide();
     }
 
-    if (isExpertModeEnabled()) {
-        $('#tabs ul.mode-connected li.tab_failsafe').show();
-    } else {
-        $('#tabs ul.mode-connected li.tab_failsafe').hide();
-    }
-
-    if (isExpertModeEnabled()) {
-        $('#tabs ul.mode-connected li.tab_adjustments').show();
-    } else {
-        $('#tabs ul.mode-connected li.tab_adjustments').hide();
-    }
-
-    if (isExpertModeEnabled()) {
-        $('#tabs ul.mode-connected li.tab_servos').show();
-    } else {
-        $('#tabs ul.mode-connected li.tab_servos').hide();
-    }
-
     if (features.isEnabled('LED_STRIP')) {
         $('#tabs ul.mode-connected li.tab_led_strip').show();
     } else {
         $('#tabs ul.mode-connected li.tab_led_strip').hide();
-    }
-
-    if (isExpertModeEnabled()) {
-        $('#tabs ul.mode-connected li.tab_sensors').show();
-    } else {
-        $('#tabs ul.mode-connected li.tab_sensors').hide();
-    }
-
-    if (isExpertModeEnabled()) {
-        $('#tabs ul.mode-connected li.tab_logging').show();
-    } else {
-        $('#tabs ul.mode-connected li.tab_logging').hide();
     }
 
     if (features.isEnabled('TRANSPONDER')) {
@@ -530,6 +669,13 @@ function updateTabList(features) {
     } else {
         $('#tabs ul.mode-connected li.tab_power').hide();
     }
+
+    if (semver.gte(CONFIG.apiVersion, "1.42.0")) {
+        $('#tabs ul.mode-connected li.tab_vtx').show();
+    } else {
+        $('#tabs ul.mode-connected li.tab_vtx').hide();
+    }
+
 }
 
 function zeroPad(value, width) {
@@ -565,28 +711,36 @@ function generateFilename(prefix, suffix) {
     return filename + '.' + suffix;
 }
 
-function getFirmwareVersion(firmwareVersion, firmwareId, hardwareId) {
+function getTargetVersion(hardwareId) {
+    var versionText = '';
+
+    if (hardwareId) {
+       versionText += i18n.getMessage('versionLabelTarget') + ': ' + hardwareId;
+    }
+
+    return versionText;
+}
+
+function getFirmwareVersion(firmwareVersion, firmwareId) {
     var versionText = '';
 
     if (firmwareVersion) {
         versionText += i18n.getMessage('versionLabelFirmware') + ': ' + firmwareId + ' ' + firmwareVersion;
-
-        if (hardwareId) {
-           versionText += ' (' + i18n.getMessage('versionLabelTarget') + ': ' + hardwareId + ')';
-        }
     }
 
     return versionText;
 }
 
 function getConfiguratorVersion() {
-    return i18n.getMessage('versionLabelConfigurator') + ': ' + getManifestVersion();
+    return i18n.getMessage('versionLabelConfigurator') + ': ' + CONFIGURATOR.version;
 }
 
 function updateTopBarVersion(firmwareVersion, firmwareId, hardwareId) {
     var versionText = getConfiguratorVersion() + '<br />';
 
-    versionText = versionText + getFirmwareVersion(firmwareVersion, firmwareId, hardwareId);
+    versionText = versionText + getFirmwareVersion(firmwareVersion, firmwareId) + '<br />';
+
+    versionText = versionText + getTargetVersion(hardwareId);
 
     $('#logo .logo_text').html(versionText);
 }
@@ -594,43 +748,32 @@ function updateTopBarVersion(firmwareVersion, firmwareId, hardwareId) {
 function updateStatusBarVersion(firmwareVersion, firmwareId, hardwareId) {
     var versionText = '';
 
-    versionText = versionText + getFirmwareVersion(firmwareVersion, firmwareId, hardwareId);
+    versionText = versionText + getFirmwareVersion(firmwareVersion, firmwareId);
 
     if (versionText !== '') {
         versionText = versionText + ', ';
     }
 
-    versionText = versionText + getConfiguratorVersion();
+    let targetVersion = getTargetVersion(hardwareId);
+    versionText = versionText + targetVersion;
+
+    if (targetVersion !== '') {
+        versionText = versionText + ', ';
+    }
+
+    versionText = versionText + getConfiguratorVersion() + ' (' + CONFIGURATOR.gitChangesetId + ')';
 
     $('#status-bar .version').text(versionText);
 }
 
-function getManifestVersion(manifest) {
-    if (!manifest) {
-        manifest = chrome.runtime.getManifest();
-    }
+function showErrorDialog(message) {
+   var dialog = $('.dialogError')[0];
 
-    var version = manifest.version_name;
-    if (!version) {
-        version = manifest.version;
-    }
+    $('.dialogError-content').html(message);
 
-    return version;
-}
+    $('.dialogError-closebtn').click(function() {
+        dialog.close();
+    });
 
-function openNewWindowsInExternalBrowser() {
-    try {
-        var gui = require('nw.gui');
-
-        //Get the current window
-        var win = gui.Window.get();
-
-        //Listen to the new window event
-        win.on('new-win-policy', function (frame, url, policy) {
-          gui.Shell.openExternal(url);
-          policy.ignore();
-        });
-    } catch (ex) {
-        console.log("require does not exist, maybe inside chrome");
-    }
+    dialog.showModal();
 }

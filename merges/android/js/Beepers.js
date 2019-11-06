@@ -33,6 +33,12 @@ var Beepers = function (config, supportedConditions) {
         );
     }
 
+    if (semver.gte(config.apiVersion, "1.39.0")) {
+        beepers.push(
+            {bit: 22, name: 'RC_SMOOTHING_INIT_FAIL', visible: true}
+        );
+    }
+
     if (supportedConditions) {
         self._beepers = [];
         beepers.forEach(function (beeper) {
@@ -81,7 +87,7 @@ Beepers.prototype.generateElements = function (template, destination) {
             destination.append(element);
 
             var input_e = $(element).find('input');
-            var label_e = $(element).find('label');
+            var label_e = $(element).find('div');
             var span_e = $(element).find('span');
 
             input_e.attr('id', 'beeper-' + i);
