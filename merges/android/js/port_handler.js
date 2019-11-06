@@ -1,8 +1,11 @@
 'use strict';
 
-var usbDevices = {
-    STM32DFU: {'vendorId': 1155, 'productId': 57105}
-};
+const TIMEOUT_CHECK = 500; // With 250 it seems that it produces a memory leak and slowdown in some versions, reason unknown
+
+var usbDevices = { filters: [
+    {'vendorId': 1155, 'productId': 57105},
+    {'vendorId': 10473, 'productId': 393}
+] };
 
 var PortHandler = new function () {
     this.initial_ports = false;
@@ -12,7 +15,7 @@ var PortHandler = new function () {
 };
 
 PortHandler.initialize = function () {
-    // start listening, check after 250ms
+    // start listening, check after TIMEOUT_CHECK ms
     this.check();
 };
 
@@ -63,7 +66,7 @@ PortHandler.check = function () {
 
             // auto-select last used port (only during initialization)
             if (!self.initial_ports) {
-                chrome.storage.local.get('last_used_port', function (result) {
+                ConfigStorage.get('last_used_port', function (result) {
                     // if last_used_port was set, we try to select it
                     if (result.last_used_port) {
                         current_ports.forEach(function(port) {
@@ -141,7 +144,7 @@ PortHandler.check = function () {
         GUI.updateManualPortVisibility();
         setTimeout(function () {
             self.check();
-        }, 250);
+        }, TIMEOUT_CHECK);
     });
 };
 
@@ -156,7 +159,9 @@ PortHandler.update_port_select = function (ports) {
         $('div#port-picker #port').append($("<option/>", {value: ports[i], text: ports[i], data: {isManual: false}}));
     }
 
-    $('div#port-picker #port').append($("<option/>", {value: 'manual', text: i18n.getMessage('portsSelectManual'), data: {isManual: true}}));
+    $('div#port-picker #port').append($("<option/>", {value: 'manual', i18n: 'portsSelectManual', data: {isManual: true}}));
+    i18n.localizePage();
+
 };
 
 PortHandler.port_detected = function(name, code, timeout, ignore_timeout) {
